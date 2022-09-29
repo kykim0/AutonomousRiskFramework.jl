@@ -21,6 +21,7 @@ using Reexport
 @reexport using BSON
 @reexport using ImportanceWeightedRiskMetrics
 @reexport using TreeImportanceSampling
+@reexport using ParallelTreeSampling
 @reexport using Random
 @reexport using MCTS
 @reexport using D3Trees
@@ -35,7 +36,7 @@ export
     NEAT,
     WorldOnRails,
     GNSS,
-    ExperimentConfig,
+    AVExperimentConfig,
     ExperimentResults,
     show_tree,
     CARLAScenarioMDP,
@@ -76,7 +77,7 @@ save_data(data, filename) = BSON.@save(filename, data)
 load_data(filename) = BSON.load(filename, @__MODULE__)[:data]
 
 
-@with_kw mutable struct ExperimentConfig
+@with_kw mutable struct AVExperimentConfig
     seed           = 0xC0FFEE  # RNG seed for determinism
     agent          = NEAT      # AV policy/agent to run. Options: [NEAT, WorldOnRails, GNSS]
     N              = 100       # Number of scenario selection iterations
@@ -88,7 +89,7 @@ load_data(filename) = BSON.load(filename, @__MODULE__)[:data]
     rethrow        = false     # Choose to rethrow the errors or simply provide warning.
     retry          = true      # Restart the run if an error was encountered.
     monitor        = @task start_carla_monitor() # Task to monitor that CARLA is still running.
-    render_carla   = true      # Show CARLA rendered display.
+    render_carla   = false      # Show CARLA rendered display.
     save_frequency = 1         # After X iterations, save results.
     s0             = nothing   # initial state
     iterations_per_process = 3 # Number of runs to make in separate Julia process (due to CARLA memory leak).
@@ -102,8 +103,8 @@ end
 end
 
 
-function generate_dirname!(config::ExperimentConfig)
-    dir = "results"
+function generate_dirname!(config::AVExperimentConfig)
+    dir = isempty(config.dir) ? "results" : config.dir
     if config.agent == WorldOnRails
         dir = "$(dir)_wor"
     elseif config.agent == NEAT
@@ -134,7 +135,7 @@ get_costs(results::Vector) = map(res->res.hist[end].r, results)
 get_costs(planner::ISDPWPlanner) = planner.mdp.costs
 
 
-function run_carla_experiment(config::ExperimentConfig)
+function run_carla_experiment(config::AVExperimentConfig)
     # Monitor that CARLA executable is still alive.
     if !istaskstarted(config.monitor) && !haskey(ENV, "CARLA_MONITOR_STARTED")
         schedule(config.monitor) # Done asynchronously.
@@ -163,36 +164,70 @@ function run_carla_experiment(config::ExperimentConfig)
         tree_mdp = TreeMDP(rmdp, 1.0, [], [], disturbance, "sum")
         c = 0.0 # exploration bonus (NOTE: keep at 0)
         α = rmdp.α # VaR/CVaR risk parameter
-        return TreeImportanceSampling.mcts_isdpw(tree_mdp; N, c, α)
+        tree_is_params = TreeISParams(c, α, 0.0, 0.0, 1.0, 1e-6)
+        return TreeImportanceSampling.mcts_isdpw(tree_mdp, tree_is_params; N)
     end
 
+    function new_planner_p()
+        c = 0.0
+        # nominal_distrib_fn = (mdp, s) -> actions(mdp, s)
+        experiment_config = ParallelTreeSampling.ExperimentConfig(nominal_steps=0)
+        solver = PISSolver(; depth=100,
+                           exploration_constant=c,
+                           n_iterations=N,
+                           enable_action_pw=false,  # Needed for discrete cases.
+                           k_state=Inf,             # Needed for discrete cases (to always transition).
+                           virtual_loss=0.0,
+                           keep_tree=true,
+                           rollout_strategy=:uniform,
+                           action_selection=:var_sigmoid,
+                           experiment_config=experiment_config,
+                           show_progress=false)
+        planner = solve(solver, rmdp)
+        return planner
+    end
+
+    use_pis = true
     if config.use_tree_is
-        s0_tree = TreeImportanceSampling.TreeState(s0)
+        if use_pis
+            s0_tree = s0
+        else
+            s0_tree = TreeImportanceSampling.TreeState(s0)
+        end
         if config.resume && !isfile(planner_filename)
             @info "Trying to resume a file that doesn't exist, starting from scratch: $planner_filename"
-            planner = new_planner()
+            planner = use_pis ? new_planner_p() : new_planner()
         elseif config.resume
             @info "Resuming: $planner_filename"
             planner = load_data(planner_filename)
             if config.additional
                 planner.solver.n_iterations = N
             else
-                planner.solver.n_iterations = N - length(planner.mdp.costs)
+                costs = use_pis ? planner.tree.costs : planner.mdp.costs
+                planner.solver.n_iterations = N - length(costs)
             end
             @info "Resuming for N = $(planner.solver.n_iterations) runs."
         else
-            planner = new_planner()
+            planner = use_pis ? new_planner_p() : new_planner()
         end
 
-        tree_in_info = true
-        planner.solver.tree_in_info = tree_in_info
+        tree_in_info = false
         β = 0.01 # for picking equal to Monte Carlo strategy (if β=1 then exactly MC)
         γ = 0.01 # for better estimate of VaR (γ=1 would give minimum variance estimate of VaR)
 
         try
-            save_callback = planner->save_data(planner, planner_filename)
-            a, info = action_info(planner, s0_tree; tree_in_info=tree_in_info, save_frequency=config.save_frequency, save_callback=save_callback, β, γ)
-            show_tree(planner)
+            save_callback = (planner) -> save_data(planner, planner_filename)
+            if use_pis
+                α = 0.1; min_s = 5.0; mix_w_fn = linear_decay_schedule(1.0, 0.90, 1_000)
+                a, info = action_info(planner, s0_tree; tree_in_info=tree_in_info,
+                                      save_freq=config.save_frequency, save_callback=save_callback,
+                                      α=α, mix_w_fn=mix_w_fn, min_s=min_s)
+            else
+                planner.solver.tree_in_info = tree_in_info
+                a, info = action_info(planner, s0_tree; tree_in_info=tree_in_info,
+                                      save_frequency=config.save_frequency, save_callback=save_callback, β, γ)
+            end
+            # show_tree(planner)
         catch err
             if config.rethrow
                 rethrow(err)
@@ -208,7 +243,8 @@ function run_carla_experiment(config::ExperimentConfig)
             end
         end
         save_data(planner, planner_filename)
-        return ExperimentResults(planner, planner.mdp.costs, [])
+        costs = use_pis ? planner.tree.costs : planner.mdp.costs
+        return ExperimentResults(planner, costs, [])
     else
         # Use Monte Carlo scenario selection instead of tree-IS.
         policy = RandomPolicy(rmdp)

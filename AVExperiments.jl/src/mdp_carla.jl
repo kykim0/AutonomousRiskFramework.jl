@@ -179,7 +179,7 @@ const ScenarioAction = Any
         "exposure_compensation" => Dict("mean" => 0, "std" => 0.5, "upper" => 1, "lower" => -1))
     run_solver::Function = run_mc_solver
     run_separate_process::Bool = true # Launch CARLA bridge in separate process (to isolate CARLA memory leak)
-    render_carla::Bool = true # Show CARLA rendering.
+    render_carla::Bool = false # Show CARLA rendering.
     iterations_per_process::Int = 3 # Number of runs to make in separate Julia process (due to CARLA memory leak).
     scenarios = [] # Collection of specific scenarios sampled and ran.
 end
@@ -231,7 +231,7 @@ function eval_carla_task!(mdp::CARLAScenarioMDP, s::ScenarioState; kwargs...)
     end
 
     ITERATIONS_PER_PROCESS_COUNTER += 1
-    if ITERATIONS_PER_PROCESS_COUNTER >= mdp.iterations_per_process
+    if mdp.run_separate_process && ITERATIONS_PER_PROCESS_COUNTER >= mdp.iterations_per_process
         println("Removing Julia process id $procid")
         rmprocs(procid)
         ITERATIONS_PER_PROCESS_COUNTER = 0

@@ -1,4 +1,7 @@
-using POMDPs
+using Pkg
+Pkg.activate(abspath(joinpath(@__DIR__, "..", "..")))
+@show string("project name: ", Pkg.project().name)
+
 using POMDPGym
 using PyCall
 pyimport("adv_carla")
