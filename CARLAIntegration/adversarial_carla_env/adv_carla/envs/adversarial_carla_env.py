@@ -126,7 +126,8 @@ class AdversarialCARLAEnv(gym.Env):
     disturbance_params = []
 
 
-    def __init__(self, *, seed=0, scenario_type="Scenario2", other_actor_type="vehicle.audi.tt", weather="Random", agent=None, agent_config=None, port=3000, record="recordings", params=DEFAULT_PARAMS, sensors=disturbance_params, no_rendering=False):
+    def __init__(self, *, seed=0, scenario_type="Scenario2", other_actor_type="vehicle.audi.tt", max_speed=None, max_brake=None, agent=None, agent_config=None, port=3000, record="recordings", params=DEFAULT_PARAMS, sensors=disturbance_params, no_rendering=False):
+        weather="Random"
         # Scenario/route selections
         dirname = os.path.dirname(__file__)
         example_scenario = False
@@ -157,6 +158,9 @@ class AdversarialCARLAEnv(gym.Env):
             # agent = "E:/CARLA_0.9.13/PythonAPI/scenario_runner/srunner/autoagents/npc_agent.py"
             agent = os.path.join(dirname, "../agents/gnss_agent.py")
 
+        extra_args_dict = dict()
+        extra_args_dict['max_speed'] = max_speed
+        extra_args_dict['max_brake'] = max_brake
 
         ## Setup ScenarioRunner
         # Setup arguments passed to the ScenarioRunner constructor
@@ -175,7 +179,8 @@ class AdversarialCARLAEnv(gym.Env):
                                   route=route,
 
                                   agent=agent,
-                                  agentConfig=agent_config,
+                                  agentConfig=str(extra_args_dict),
+                                  # agentConfig=agent_config,
 
                                   output=False,
                                   file=False,

@@ -10,24 +10,28 @@ function is_carla_running()
     end
 end
 
-function start_carla_monitor(time=5)
+function start_carla_monitor(time=10)
     # Check if CARLA executable is running
-    while is_carla_running()
+    while true
         # CARLA already open
-        sleep(time)
+        if is_carla_running()
+            sleep(time)
+        else
+            tasks = read(`ps -aux`, String)
+            # @show tasks
+            @show occursin("CarlaUE4.sh", tasks)
+            if Sys.iswindows()
+                # CARLA not open, so open it.
+                carla_start = joinpath(@__DIR__, "..", "..", "CARLAIntegration", "adversarial_carla_env", "carla-start.bat")
+                @info "Re-opening CARLA executable."
+                run(`cmd /c $carla_start`)
+            else
+                carla_start = joinpath(@__DIR__, "..", "..", "CARLAIntegration", "adversarial_carla_env", "carla-start.sh")
+                @info "Re-opening CARLA executable."
+                # @async run(`$carla_start`)
+                run(`$carla_start`, wait=false)
+            end
+            sleep(15)
+        end
     end
-
-    # CARLA not open, so open it.
-    if Sys.iswindows()    
-        carla_start = joinpath(@__DIR__, "..", "..", "CARLAIntegration", "adversarial_carla_env", "carla-start.bat")
-        @info "Re-opening CARLA executable."
-        run(`cmd /c $carla_start`)
-        
-    else
-        carla_start = joinpath(@__DIR__, "..", "..", "CARLAIntegration", "adversarial_carla_env", "carla-start.sh")
-        @info "Re-opening CARLA executable."
-        run(`$carla_start`, wait=false)
-    end
-    sleep(5)  # To give CARLA a chance to fully come up.
-    start_carla_monitor()
 end

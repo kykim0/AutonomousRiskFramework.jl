@@ -3,7 +3,13 @@ import gym
 import adv_carla
 import os
 
-AGENT = "WorldOnRails" # Choose between: ["NEAT", "WorldOnRails", "GNSS"]
+
+import gc
+import torch
+torch.cuda.empty_cache()
+gc.collect()
+
+AGENT = "GNSS" # Choose between: ["NEAT", "WorldOnRails", "GNSS"]
 USE_GNSS_SENSOR = False or (AGENT == "GNSS")
 USE_RANDOM_WEATHER = False
 
@@ -62,13 +68,13 @@ def main():
             obs = env.reset()
             t = r = 0
             done = False
-            σ = 0.00001 # noise standard deviation (1.11 meters)
+            sigma = 0.00001 # noise standard deviation (1.11 meters)
             while not done:
                 t += 1
                 action = np.array([])
                 if USE_GNSS_SENSOR:
-                    lat = 2*σ
-                    lon = 2*σ
+                    lat = 2*sigma
+                    lon = 2*sigma
                     alt = 0
                     action = np.append(action, [lat, lon, alt])
                 if AGENT != "GNSS":

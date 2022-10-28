@@ -38,10 +38,10 @@ include("agents.jl")
 ##################################################
 
 @with_kw mutable struct Weather
-    cloudiness             = Uniform(0,100)
-    precipitation          = Uniform(0,100)
-    sun_altitude_angle     = Uniform(-90,90)
-    fog_density            = Uniform(0,100)
+    cloudiness             = Distributions.Uniform(0,100)
+    precipitation          = Distributions.Uniform(0,100)
+    sun_altitude_angle     = Distributions.Uniform(-90,90)
+    fog_density            = Distributions.Uniform(0,100)
 end
 
 
@@ -70,7 +70,7 @@ end
 function discretize!(obj, bins)
     for name in propertynames(obj)
         distr = getfield(obj, name)
-        if isa(distr, Uniform)
+        if isa(distr, Distributions.Uniform)
             vals = collect(range(distr.a, stop=distr.b, length=bins))
             probs = normalize(ones(bins), 1)
             discrete_distr = GenericDiscreteNonParametric(vals, probs)
@@ -143,11 +143,18 @@ end
 @with_kw mutable struct ScenarioState
     scenario_type::Union{Nothing, String} = nothing
     other_actor_type::Union{Nothing, String} = nothing
-    weather::Union{Nothing, Dict} = nothing
+    max_speed::Union{Nothing, Float64} = nothing
+    max_brake::Union{Nothing, Float64} = nothing
 end
 
-Base.hash(s::ScenarioState, h::UInt) = hash((s.scenario_type, s.other_actor_type, s.weather), h)
-Base.isequal(s1::ScenarioState, s2::ScenarioState) = (s1.scenario_type == s2.scenario_type) && (s1.other_actor_type == s2.other_actor_type) && (s1.weather == s2.weather)
+# @with_kw mutable struct ScenarioState
+#     scenario_type::Union{Nothing, String} = nothing
+#     other_actor_type::Union{Nothing, String} = nothing
+#     weather::Union{Nothing, Dict} = nothing
+# end
+
+Base.hash(s::ScenarioState, h::UInt) = hash((s.scenario_type, s.other_actor_type, s.max_speed, s.max_brake), h)
+Base.isequal(s1::ScenarioState, s2::ScenarioState) = (s1.scenario_type == s2.scenario_type) && (s1.other_actor_type == s2.other_actor_type) && (s1.max_speed == s2.max_speed && (s1.max_brake == s2.max_brake))
 Base.:(==)(s1::ScenarioState, s2::ScenarioState) = isequal(s1, s2)
 
 const ScenarioAction = Any
@@ -204,7 +211,9 @@ function eval_carla_task!(mdp::CARLAScenarioMDP, s::ScenarioState; kwargs...)
     seed = mdp.seed + mdp.counter
     scenario_type = s.scenario_type
     other_actor_type = s.other_actor_type
-    weather = fill_out_weather!(s.weather)
+    # weather = fill_out_weather!(s.weather)
+    max_speed = s.max_speed
+    max_brake = s.max_brake
 
     Random.seed!(seed)
 
@@ -219,10 +228,12 @@ function eval_carla_task!(mdp::CARLAScenarioMDP, s::ScenarioState; kwargs...)
         end
         @everywhere eval(quote include(joinpath(@__DIR__, "task.jl")) end)
         @everywhere eval(quote using AVExperiments end)
-        task = remotecall_wait(eval_carla_task_core, procid, run_solver, seed, scenario_type, other_actor_type, weather; kwargs...)
+        # task = remotecall_wait(eval_carla_task_core, procid, run_solver, seed, scenario_type, other_actor_type, weather; kwargs...)
+        task = remotecall_wait(eval_carla_task_core, procid, run_solver, seed, scenario_type, other_actor_type, max_speed, max_brake; kwargs...)
         cost, dataset = fetch(task)
     else
-        cost, dataset = eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type, weather; kwargs...)
+        # cost, dataset = eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type, weather; kwargs...)
+        cost, dataset = eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type, max_speed, max_brake; kwargs...)
     end
 
     if mdp.collect_data
@@ -247,13 +258,16 @@ function eval_carla_single(mdp::CARLAScenarioMDP, s::ScenarioState)
     sensors = [mdp.sensor_config_gnss]
     scenario_type = s.scenario_type
     other_actor_type = s.other_actor_type
-    weather = fill_out_weather!(s.weather)
+    # weather = fill_out_weather!(s.weather)
+    max_speed = s.max_speed
+    max_brake = s.max_brake
 
     @info scenario_type
     @info other_actor_type
-    display(weather)
+    # display(weather)
 
-    carla_mdp = GymPOMDP(Symbol("adv-carla"), sensors=sensors, seed=mdp.seed, scenario_type=scenario_type, other_actor_type=other_actor_type, weather=weather, no_rendering=false)
+    # carla_mdp = GymPOMDP(Symbol("adv-carla"), sensors=sensors, seed=mdp.seed, scenario_type=scenario_type, other_actor_type=other_actor_type, weather=weather, no_rendering=false)
+    carla_mdp = GymPOMDP(Symbol("adv-carla"), sensors=sensors, seed=mdp.seed, scenario_type=scenario_type, other_actor_type=other_actor_type, max_speed=max_speed, max_brake=max_brake, no_rendering=false)
     env = carla_mdp.env
     σ = 0.0001 # noise variance
     local info
@@ -289,33 +303,58 @@ end
 
 function POMDPs.gen(mdp::CARLAScenarioMDP, s::ScenarioState, a::ScenarioAction, rng=Random.GLOBAL_RNG)
     if isnothing(s.scenario_type)
-        sp = ScenarioState(a, nothing, nothing)
+        sp = ScenarioState(a, nothing, nothing, nothing)
     elseif isnothing(s.other_actor_type)
-        sp = ScenarioState(s.scenario_type, a, nothing)
-    elseif isnothing(s.weather)
-        sp = ScenarioState(s.scenario_type, s.other_actor_type, initialize_weather_dict())
-        return gen(mdp, sp, a, rng)
+        sp = ScenarioState(s.scenario_type, a, nothing, nothing)
+    elseif isnothing(s.max_speed)
+        sp = ScenarioState(s.scenario_type, s.other_actor_type, a, nothing)
     else
-        for k in keys(s.weather)
-            if isnothing(s.weather[k])
-                sp = ScenarioState(s.scenario_type, s.other_actor_type, copy(s.weather))
-                sp.weather[k] = a
-                break
-            end
-        end
+        sp = ScenarioState(s.scenario_type, s.other_actor_type, s.max_speed, a)
     end
     r = reward(mdp, sp, a)
     return (sp=sp, r=r)
 end
 
 
+# function POMDPs.gen(mdp::CARLAScenarioMDP, s::ScenarioState, a::ScenarioAction, rng=Random.GLOBAL_RNG)
+#     if isnothing(s.scenario_type)
+#         sp = ScenarioState(a, nothing, nothing)
+#     elseif isnothing(s.other_actor_type)
+#         sp = ScenarioState(s.scenario_type, a, nothing)
+#     elseif isnothing(s.weather)
+#         sp = ScenarioState(s.scenario_type, s.other_actor_type, initialize_weather_dict())
+#         return gen(mdp, sp, a, rng)
+#     else
+#         for k in keys(s.weather)
+#             if isnothing(s.weather[k])
+#                 sp = ScenarioState(s.scenario_type, s.other_actor_type, copy(s.weather))
+#                 sp.weather[k] = a
+#                 break
+#             end
+#         end
+#     end
+#     r = reward(mdp, sp, a)
+#     return (sp=sp, r=r)
+# end
+
+
 function POMDPs.isterminal(mdp::CARLAScenarioMDP, s::ScenarioState)
     # terminate when all decisions have been made
     scenario_type_selected = !isnothing(s.scenario_type)
     other_actor_type_selected = !isnothing(s.other_actor_type)
-    weather_selected = !isnothing(s.weather) && all(.!isnothing.(values(s.weather)))
-    return scenario_type_selected && other_actor_type_selected && weather_selected
+    max_speed_selected = !isnothing(s.max_speed)
+    max_brake_selected = !isnothing(s.max_brake)
+    return scenario_type_selected && other_actor_type_selected && max_speed_selected && max_brake_selected
 end
+
+
+# function POMDPs.isterminal(mdp::CARLAScenarioMDP, s::ScenarioState)
+#     # terminate when all decisions have been made
+#     scenario_type_selected = !isnothing(s.scenario_type)
+#     other_actor_type_selected = !isnothing(s.other_actor_type)
+#     weather_selected = !isnothing(s.weather) && all(.!isnothing.(values(s.weather)))
+#     return scenario_type_selected && other_actor_type_selected && weather_selected
+# end
 
 
 POMDPs.discount(mdp::CARLAScenarioMDP) = mdp.γ
@@ -326,18 +365,33 @@ function POMDPs.actions(mdp::CARLAScenarioMDP, s::ScenarioState)
         return mdp.scenario_type_distr
     elseif isnothing(s.other_actor_type)
         return mdp.other_actor_type_distr(s.scenario_type) # conditional
-    elseif isnothing(s.weather)
-        s.weather = initialize_weather_dict()
-        return actions(mdp, s)
+    elseif isnothing(s.max_speed)
+        l = [10, 20, 30, 40, 50]
+        return DiscreteNonParametric(l, fill(1/length(l), length(l)))
     else
-        for k in keys(s.weather)
-            if isnothing(s.weather[k])
-                return getfield(mdp.weather_distr, k)
-            end
-        end
+        l = [0.10, 0.20, 0.30, 0.40, 0.50]
+        return DiscreteNonParametric(l, fill(1/length(l), length(l)))
     end
-    return []
 end
+
+
+# function POMDPs.actions(mdp::CARLAScenarioMDP, s::ScenarioState)
+#     if isnothing(s.scenario_type)
+#         return mdp.scenario_type_distr
+#     elseif isnothing(s.other_actor_type)
+#         return mdp.other_actor_type_distr(s.scenario_type) # conditional
+#     elseif isnothing(s.weather)
+#         s.weather = initialize_weather_dict()
+#         return actions(mdp, s)
+#     else
+#         for k in keys(s.weather)
+#             if isnothing(s.weather[k])
+#                 return getfield(mdp.weather_distr, k)
+#             end
+#         end
+#     end
+#     return []
+# end
 
 
 ##################################################

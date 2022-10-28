@@ -1,11 +1,11 @@
 opencv-python
-gym
-numpy
-lxml
+gym==0.21
+numpy>=1.18.0
+lxml==4.6.3
 pickleshare
-torchvision
-stable-baselines3
+torchvision==0.12.0
+stable-baselines3==1.6.0
 tqdm
 lmdb
 wandb
-torch
+torch==1.11.0

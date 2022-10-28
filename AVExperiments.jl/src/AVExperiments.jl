@@ -93,6 +93,9 @@ load_data(filename) = BSON.load(filename, @__MODULE__)[:data]
     save_frequency = 1         # After X iterations, save results.
     s0             = nothing   # initial state
     iterations_per_process = 3 # Number of runs to make in separate Julia process (due to CARLA memory leak).
+    # Various experimental params below.
+    c_const = 0.0  # Exploration constant.
+    min_s = 5.0    # Minimum sigmoid slope.
 end
 
 
@@ -114,7 +117,9 @@ function generate_dirname!(config::AVExperimentConfig)
     end
 
     if config.use_tree_is
-        dir = "$(dir)_SS-IS"
+        c_const = Int(config.c_const)
+        min_s = Int(config.min_s)
+        dir = "$(dir)_SS-IS_c$(c_const)_s$(min_s)"
     else
         dir = "$(dir)_SS-MC"
     end
@@ -169,8 +174,7 @@ function run_carla_experiment(config::AVExperimentConfig)
     end
 
     function new_planner_p()
-        c = 0.0
-        # nominal_distrib_fn = (mdp, s) -> actions(mdp, s)
+        c = config.c_const
         experiment_config = ParallelTreeSampling.ExperimentConfig(nominal_steps=0)
         solver = PISSolver(; depth=100,
                            exploration_constant=c,
@@ -218,7 +222,7 @@ function run_carla_experiment(config::AVExperimentConfig)
         try
             save_callback = (planner) -> save_data(planner, planner_filename)
             if use_pis
-                α = 0.1; min_s = 5.0; mix_w_fn = linear_decay_schedule(1.0, 0.90, 1_000)
+                α = rmdp.α; min_s = config.min_s; mix_w_fn = linear_decay_schedule(1.0, 0.90, 1_000)
                 a, info = action_info(planner, s0_tree; tree_in_info=tree_in_info,
                                       save_freq=config.save_frequency, save_callback=save_callback,
                                       α=α, mix_w_fn=mix_w_fn, min_s=min_s)

@@ -35,6 +35,10 @@ class GnssAgent(AutonomousAgent):
         """
         Setup the agent parameters
         """
+        extra_args_dict = eval(path_to_conf_file)
+        self._max_speed = extra_args_dict['max_speed']
+        self._max_brake = extra_args_dict['max_brake']
+
         self._route_assigned = False
         self._agent = None
         self.time = 0
@@ -94,8 +98,10 @@ class GnssAgent(AutonomousAgent):
                         hero_actor = actor
                         break
                 if hero_actor:
-                    target_speed = hero_actor.get_speed_limit()
-                    self._agent = BasicAgent(hero_actor, target_speed=target_speed)
+                    target_speed = self._max_speed or hero_actor.get_speed_limit()
+                    opt_dict = dict()
+                    if self._max_brake: opt_dict['max_brake'] = self._max_brake
+                    self._agent = BasicAgent(hero_actor, target_speed=target_speed, opt_dict=opt_dict)
 
                 return control
 

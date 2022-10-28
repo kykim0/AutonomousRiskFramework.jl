@@ -22,7 +22,8 @@ SCENARIO_CLASS_MAPPING = Dict(
     # "Scenario10" => "NoSignalJunctionCrossingRoute",
 )
 
-function eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type, weather;
+# eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type, max_speed, max_brake; kwargs...)
+function eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type, max_speed, max_brake;
                               leaf_noise=true, agent=NEAT, apply_gnss_noise=false,
                               sensor_config_gnss=nothing, sensor_config_camera=nothing,
                               no_rendering=false)
@@ -31,7 +32,7 @@ function eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type,
     @info "$scenario_type: $(SCENARIO_CLASS_MAPPING[scenario_type])"
     @info other_actor_type
     @info "Seed: $seed"
-    display(weather)
+    # display(weather)
 
     if apply_gnss_noise
         push!(sensors, sensor_config_gnss)
@@ -50,7 +51,7 @@ function eval_carla_task_core(run_solver, seed, scenario_type, other_actor_type,
         agent_config = nothing
     end
 
-    gym_args = (sensors=sensors, seed=seed, scenario_type=scenario_type, other_actor_type=other_actor_type, weather=weather, no_rendering=no_rendering, agent=agent_path, agent_config=agent_config)
+    gym_args = (sensors=sensors, seed=seed, scenario_type=scenario_type, other_actor_type=other_actor_type, max_speed=max_speed, max_brake=max_brake, no_rendering=no_rendering, agent=agent_path, agent_config=agent_config)
     carla_mdp = GymPOMDP(Symbol("adv-carla"); gym_args...)
 
     if leaf_noise
